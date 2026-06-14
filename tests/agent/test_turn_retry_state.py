@@ -15,6 +15,7 @@ from agent.turn_retry_state import TurnRetryState
 
 EXPECTED_FIELDS = {
     "codex_auth_retry_attempted",
+    "codex_cli_import_retry_attempted",
     "anthropic_auth_retry_attempted",
     "nous_auth_retry_attempted",
     "nous_paid_entitlement_refresh_attempted",
