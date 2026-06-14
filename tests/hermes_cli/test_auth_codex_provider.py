@@ -16,6 +16,7 @@ from hermes_cli.auth import (
     _save_codex_tokens,
     _import_codex_cli_tokens,
     _login_openai_codex,
+    import_codex_cli_runtime_credentials,
     refresh_codex_oauth_pure,
     resolve_codex_runtime_credentials,
     resolve_provider,
@@ -218,6 +219,63 @@ def test_resolve_provider_explicit_codex_does_not_fallback(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     assert resolve_provider("openai-codex") == "openai-codex"
+
+
+def _write_codex_cli_auth(codex_home: Path, *, access_token: str, refresh_token: str = "cli-refresh"):
+    """Write a Codex CLI shared auth.json (~/.codex/auth.json shape)."""
+    codex_home.mkdir(parents=True, exist_ok=True)
+    (codex_home / "auth.json").write_text(json.dumps({
+        "tokens": {"access_token": access_token, "refresh_token": refresh_token},
+    }))
+
+
+def test_import_codex_cli_runtime_credentials_adopts_fresh_tokens(tmp_path, monkeypatch):
+    """A live Codex CLI token is adopted and persisted into the Hermes store.
+
+    This is the automated form of the manual ``codex`` → ``hermes auth``
+    re-import the 401 diagnostic tells the user to run when their own refresh
+    token was rotated by another client.
+    """
+    hermes_home = tmp_path / "hermes"
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    (hermes_home / "auth.json").write_text(json.dumps({"version": 1, "providers": {}}))
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+
+    codex_home = tmp_path / "codex"
+    fresh_token = _jwt_with_exp(int(time.time()) + 3600)
+    _write_codex_cli_auth(codex_home, access_token=fresh_token, refresh_token="cli-rt")
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    creds = import_codex_cli_runtime_credentials()
+
+    assert creds is not None
+    assert creds["api_key"] == fresh_token
+    assert creds["source"] == "codex-cli-import"
+    assert creds["base_url"] == DEFAULT_CODEX_BASE_URL
+
+    # The imported tokens must be persisted so subsequent calls/refreshes use them.
+    persisted = _read_codex_tokens()
+    assert persisted["tokens"]["access_token"] == fresh_token
+    assert persisted["tokens"]["refresh_token"] == "cli-rt"
+
+
+def test_import_codex_cli_runtime_credentials_none_when_no_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-missing"))
+
+    assert import_codex_cli_runtime_credentials() is None
+
+
+def test_import_codex_cli_runtime_credentials_none_when_expired(tmp_path, monkeypatch):
+    """An expired CLI token is not usable — importing it would not recover."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+
+    codex_home = tmp_path / "codex"
+    expired = _jwt_with_exp(int(time.time()) - 10)
+    _write_codex_cli_auth(codex_home, access_token=expired)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    assert import_codex_cli_runtime_credentials() is None
 
 
 def test_save_codex_tokens_roundtrip(tmp_path, monkeypatch):

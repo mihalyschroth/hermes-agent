@@ -3715,6 +3715,59 @@ class AIAgent:
 
         return True
 
+    def _try_import_codex_cli_credentials(self) -> bool:
+        """Adopt fresh Codex tokens from the Codex CLI shared file after a 401.
+
+        Last-resort recovery for ``openai-codex`` when our own refresh token is
+        stale — rotated (and invalidated) by Codex CLI or the VS Code extension,
+        which is exactly the failure mode the runtime 401 diagnostic describes.
+        ``_try_refresh_codex_client_credentials`` can't recover from that (the
+        refresh token it would replay is the consumed one); this imports the
+        live tokens from ``~/.codex/auth.json``, persists them into Hermes's
+        store, and rebuilds the primary client so the retry uses the working
+        credential.
+
+        Scoped to ``openai-codex`` only — ``xai-oauth`` doesn't share the
+        ``~/.codex`` file. Returns ``False`` (no retry) when there's nothing
+        usable to import, or when the imported token matches the one we already
+        failed with (avoids a pointless retry against the same dead token).
+        """
+        if self.api_mode != "codex_responses" or self.provider != "openai-codex":
+            return False
+
+        try:
+            from hermes_cli.auth import import_codex_cli_runtime_credentials
+
+            creds = import_codex_cli_runtime_credentials()
+        except Exception as exc:
+            logger.debug("Codex CLI token import failed: %s", exc)
+            return False
+
+        if not creds:
+            return False
+
+        api_key = creds.get("api_key")
+        base_url = creds.get("base_url")
+        if not isinstance(api_key, str) or not api_key.strip():
+            return False
+        if not isinstance(base_url, str) or not base_url.strip():
+            return False
+        # The shared file may hold the same token we already failed with (e.g.
+        # nothing newer has been minted yet) — re-adopting it would just burn
+        # another retry on a token the backend already rejected.
+        if api_key.strip() == str(self.api_key or "").strip():
+            return False
+
+        self.api_key = api_key.strip()
+        self.base_url = base_url.strip().rstrip("/")
+        self._client_kwargs["api_key"] = self.api_key
+        self._client_kwargs["base_url"] = self.base_url
+
+        if not self._replace_primary_openai_client(reason="codex_cli_token_import"):
+            return False
+
+        return True
+
     def _try_refresh_nous_client_credentials(
         self,
         *,

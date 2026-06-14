@@ -2146,6 +2146,26 @@ def run_conversation(
                         _label = "xAI OAuth" if agent.provider == "xai-oauth" else "Codex"
                         agent._buffer_vprint(f"🔐 {_label} auth refreshed after 401. Retrying request...")
                         continue
+                # Last-resort Codex recovery: our own refresh token may have been
+                # rotated (and invalidated) by another client (Codex CLI / VS
+                # Code), so refreshing it above either failed outright or yielded
+                # a token the backend still rejects. Import the live tokens from
+                # ~/.codex/auth.json before giving up. Fires on its own one-shot
+                # guard so it still runs after a refresh+retry already burned the
+                # guard above.
+                if (
+                    agent.api_mode == "codex_responses"
+                    and agent.provider == "openai-codex"
+                    and status_code == 401
+                    and not _retry.codex_cli_import_retry_attempted
+                ):
+                    _retry.codex_cli_import_retry_attempted = True
+                    if agent._try_import_codex_cli_credentials():
+                        agent._buffer_vprint(
+                            "🔐 Imported fresh Codex tokens from Codex CLI "
+                            "(~/.codex/auth.json). Retrying request..."
+                        )
+                        continue
                 if (
                     agent.api_mode == "chat_completions"
                     and agent.provider == "nous"

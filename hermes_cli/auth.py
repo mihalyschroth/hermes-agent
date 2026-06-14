@@ -3707,6 +3707,49 @@ def _import_codex_cli_tokens() -> Optional[Dict[str, str]]:
         return None
 
 
+def import_codex_cli_runtime_credentials() -> Optional[Dict[str, Any]]:
+    """Adopt fresh Codex tokens from the Codex CLI shared file as a 401 recovery.
+
+    Recovery path for the case the runtime diagnostic already describes: Hermes's
+    stored refresh token was rotated (and thereby invalidated) by another client
+    — Codex CLI or the VS Code extension — so Hermes can no longer refresh its
+    own copy, yet ``~/.codex/auth.json`` holds a newer, non-expired access token.
+    This automates the manual ``codex`` → ``hermes auth`` re-import the diagnostic
+    tells the user to run.
+
+    When a usable token is found it is persisted into Hermes's own token store
+    (via ``_save_codex_tokens``) so subsequent calls and refreshes use the live
+    token, and runtime credentials are returned in the same shape as
+    ``resolve_codex_runtime_credentials``. Returns ``None`` when the shared file
+    is absent, malformed, or its access token is already expired (nothing usable
+    to adopt).
+    """
+    imported = _import_codex_cli_tokens()
+    if not imported:
+        return None
+    access_token = str(imported.get("access_token", "") or "").strip()
+    if not access_token:
+        return None
+    try:
+        _save_codex_tokens(imported)
+    except Exception:
+        # Persisting is best-effort — even if the write fails we can still
+        # hand the live token back so the in-flight retry recovers.
+        logger.debug("Failed to persist imported Codex CLI tokens", exc_info=True)
+    base_url = (
+        os.getenv("HERMES_CODEX_BASE_URL", "").strip().rstrip("/")
+        or DEFAULT_CODEX_BASE_URL
+    )
+    return {
+        "provider": "openai-codex",
+        "base_url": base_url,
+        "api_key": access_token,
+        "source": "codex-cli-import",
+        "last_refresh": None,
+        "auth_mode": "chatgpt",
+    }
+
+
 def resolve_codex_runtime_credentials(
     *,
     force_refresh: bool = False,
