@@ -41,6 +41,7 @@ class TurnRetryState:
 
     # ── Per-provider OAuth / credential refresh guards ───────────────────
     codex_auth_retry_attempted: bool = False
+    codex_cli_import_retry_attempted: bool = False
     anthropic_auth_retry_attempted: bool = False
     nous_auth_retry_attempted: bool = False
     nous_paid_entitlement_refresh_attempted: bool = False
